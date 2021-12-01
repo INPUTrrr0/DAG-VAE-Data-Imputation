@@ -32,6 +32,22 @@ from modules import *
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument('--missing_percentage', type = float, default = 0.1,
+                    help ='missing percentage/100 data has missing value')
+parser.add_argument('--data_variable_size', type=int, default=30,
+                    help='the number of variables in synthetic generated data')
+parser.add_argument('--graph_degree', type=int, default=2,
+                    help='the number of degree in generated DAG graph')
+
+parser.add_argument('--batch-size', type=int, default = 100, # note: should be divisible by sample size, otherwise throw an error
+                    help='Number of samples per batch.')
+parser.add_argument('--k_max_iter', type = int, default = 100,
+                    help ='the max iteration number for searching lambda and c')
+parser.add_argument('--data_sample_size', type=int, default=500,
+                    help='the number of samples of data')
+parser.add_argument('--epochs', type=int, default= 200,
+                    help='Number of epochs to train.')
+
 # -----------data parameters ------
 # configurations
 parser.add_argument('--data_type', type=str, default= 'synthetic',
@@ -41,14 +57,10 @@ parser.add_argument('--data_filename', type=str, default= 'alarm',
                     help='data file name containing the discrete files.')
 parser.add_argument('--data_dir', type=str, default= 'data/',
                     help='data file name containing the discrete files.')
-parser.add_argument('--data_sample_size', type=int, default=500,
-                    help='the number of samples of data')
-parser.add_argument('--data_variable_size', type=int, default=30,
-                    help='the number of variables in synthetic generated data')
+
 parser.add_argument('--graph_type', type=str, default='erdos-renyi',
                     help='the type of DAG graph by generation method')
-parser.add_argument('--graph_degree', type=int, default=2,
-                    help='the number of degree in generated DAG graph')
+
 parser.add_argument('--graph_sem_type', type=str, default='linear-gauss',
                     help='the structure equation model (SEM) parameter type')
 parser.add_argument('--graph_linear_type', type=str, default='linear',
@@ -80,10 +92,8 @@ parser.add_argument('--use_A_positiver_loss', type = int, default = 0,
 parser.add_argument('--no-cuda', action='store_true', default=True,
                     help='Disables CUDA training.')
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default= 200,
-                    help='Number of epochs to train.')
-parser.add_argument('--batch-size', type=int, default = 100, # note: should be divisible by sample size, otherwise throw an error
-                    help='Number of samples per batch.')
+
+
 parser.add_argument('--lr', type=float, default=3e-3,  # basline rate = 1e-3
                     help='Initial learning rate.')
 parser.add_argument('--encoder-hidden', type=int, default=64,
@@ -92,8 +102,7 @@ parser.add_argument('--decoder-hidden', type=int, default=64,
                     help='Number of hidden units.')
 parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
-parser.add_argument('--k_max_iter', type = int, default = 100,
-                    help ='the max iteration number for searching lambda and c')
+
 
 parser.add_argument('--encoder', type=str, default='mlp',
                     help='Type of path encoder model (mlp, or sem).')
@@ -168,13 +177,6 @@ if args.dynamic_graph:
     #print("WARNING: No save_folder provided!" +
      #     "Testing (within this script) will throw an error.")
 
-
-# ================================================
-# get data: experiments = {synthetic SEM, ALARM}
-# ================================================
-train_loader, test_data, X_data80, X_data20, ground_truth_G = load_data( args, args.batch_size, args.suffix)
-#c=imputation(ground_truth_G,test_data,args.graph_sem_type, args.graph_linear_type)
-#print(c-X_data20)
 
 
 #===================================
@@ -436,172 +438,182 @@ def train(epoch, best_val_loss, ground_truth_G, lambda_A, c_A, optimizer,train_l
 
 
 
+def experiment():
+    global args
+
+    train_loader, test_data, X_data80, X_data20, ground_truth_G = load_data( args, args.batch_size, args.suffix)
+
+    t_total = time.time()
+    best_ELBO_loss = np.inf
+    best_NLL_loss = np.inf
+    best_MSE_loss = np.inf
+    best_epoch = 0
+    best_ELBO_graph = []
+    best_NLL_graph = []
+    best_MSE_graph = []
+    # optimizer step on hyparameters
+    c_A = args.c_A
+    lambda_A = args.lambda_A
+    h_A_new = torch.tensor(1.)
+    h_tol = args.h_tol
+    k_max_iter = int(args.k_max_iter)
+    h_A_old = np.inf
 
 
-t_total = time.time()
-best_ELBO_loss = np.inf
-best_NLL_loss = np.inf
-best_MSE_loss = np.inf
-best_epoch = 0
-best_ELBO_graph = []
-best_NLL_graph = []
-best_MSE_graph = []
-# optimizer step on hyparameters
-c_A = args.c_A
-lambda_A = args.lambda_A
-h_A_new = torch.tensor(1.)
-h_tol = args.h_tol
-k_max_iter = int(args.k_max_iter)
-h_A_old = np.inf
+    t=train_loader
 
+    try:
+        for step_k in range(k_max_iter):
+            while c_A < 1e+20:
+                for epoch in range(args.epochs):
+                
+                    ELBO_loss, NLL_loss, MSE_loss, graph, origin_A = train(epoch, best_ELBO_loss, ground_truth_G, lambda_A, c_A, optimizer,t)
+                    if ELBO_loss < best_ELBO_loss:
+                        best_ELBO_loss = ELBO_loss
+                        best_epoch = epoch
+                        best_ELBO_graph = graph
 
-t=train_loader
+                    if NLL_loss < best_NLL_loss:
+                        best_NLL_loss = NLL_loss
+                        best_epoch = epoch
+                        best_NLL_graph = graph
 
-try:
-    for step_k in range(k_max_iter):
-        while c_A < 1e+20:
-            for epoch in range(args.epochs):
-               
-                ELBO_loss, NLL_loss, MSE_loss, graph, origin_A = train(epoch, best_ELBO_loss, ground_truth_G, lambda_A, c_A, optimizer,t)
-                if ELBO_loss < best_ELBO_loss:
-                    best_ELBO_loss = ELBO_loss
-                    best_epoch = epoch
-                    best_ELBO_graph = graph
+                    if MSE_loss < best_MSE_loss:
+                        best_MSE_loss = MSE_loss
+                        best_epoch = epoch
+                        best_MSE_graph = graph
+                #print("iteration is: {:04d}".format(step_k))
+                #print("Optimization Finished!")
+                #print("Best Epoch: {:04d}".format(best_epoch))
+                if ELBO_loss > 2 * best_ELBO_loss:
+                    break
 
-                if NLL_loss < best_NLL_loss:
-                    best_NLL_loss = NLL_loss
-                    best_epoch = epoch
-                    best_NLL_graph = graph
+                # update parameters
+                A_new = origin_A.data.clone()
+                h_A_new = _h_A(A_new, args.data_variable_size)
+                if h_A_new.item() > 0.25 * h_A_old:
+                    c_A*=10
+                else:
+                    break
 
-                if MSE_loss < best_MSE_loss:
-                    best_MSE_loss = MSE_loss
-                    best_epoch = epoch
-                    best_MSE_graph = graph
+            '''for xxx in range(args.graph_degree):
+                for yyy in range(xxx,args.graph_degree):
+                    if best_ELBO_graph[xxx,yyy]!=0 and best_ELBO_graph[yyy,xxx]!=0:
+                        print("not good!")
+            print("I am fine")'''
             print("iteration is: {:04d}".format(step_k))
-            #print("Optimization Finished!")
-            print("Best Epoch: {:04d}".format(best_epoch))
-            if ELBO_loss > 2 * best_ELBO_loss:
+            if step_k>=3:    
+                #print("best elbo")
+                #print(best_ELBO_graph)   
+                c=imputation(nx.DiGraph(best_ELBO_graph),test_data,args.graph_sem_type, args.graph_linear_type)
+                # full= np.concatenate(X_data80,c)
+                full = np.concatenate((X_data80,c),axis=0)
+            
+
+                feat_train = torch.FloatTensor(full)
+                train_data = TensorDataset(feat_train, feat_train)
+                t = DataLoader(train_data, batch_size=args.batch_size)
+
+                # update parameters
+                # h_A, adj_A are computed in loss anyway, so no need to store
+            h_A_old = h_A_new.item()
+            lambda_A += c_A * h_A_new.item()
+
+            if h_A_new.item() <= h_tol:
                 break
 
-            # update parameters
-            A_new = origin_A.data.clone()
-            h_A_new = _h_A(A_new, args.data_variable_size)
-            if h_A_new.item() > 0.25 * h_A_old:
-                c_A*=10
-            else:
-                break
 
-        for xxx in range(args.graph_degree):
-            for yyy in range(xxx,args.graph_degree):
-                if best_ELBO_graph[xxx,yyy]!=0 and best_ELBO_graph[yyy,xxx]!=0:
-                    print("not good!")
-        print("I am fine")
-        if step_k>=3:    
-            #print("best elbo")
-            #print(best_ELBO_graph)   
-            c=imputation(nx.DiGraph(best_ELBO_graph),test_data,args.graph_sem_type, args.graph_linear_type)
-            # full= np.concatenate(X_data80,c)
-            full = np.concatenate((X_data80,c),axis=0)
-         
+        ##if args.save_folder:
+        #  print("Best Epoch: {:04d}".format(best_epoch), file=log)
+    #log.flush()
 
-            feat_train = torch.FloatTensor(full)
-            train_data = TensorDataset(feat_train, feat_train)
-            t = DataLoader(train_data, batch_size=args.batch_size)
+        # test()
+        print (best_ELBO_graph)
+        #print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_ELBO_graph))
+        print('Best ELBO Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-            # update parameters
-            # h_A, adj_A are computed in loss anyway, so no need to store
-        h_A_old = h_A_new.item()
-        lambda_A += c_A * h_A_new.item()
-
-        if h_A_new.item() <= h_tol:
-            break
+        #print(best_NLL_graph)
+        #print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_NLL_graph))
+        print('Best NLL Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
 
-    ##if args.save_folder:
-      #  print("Best Epoch: {:04d}".format(best_epoch), file=log)
-#log.flush()
+        #print (best_MSE_graph)
+        #print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
+        print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    # test()
-    print (best_ELBO_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_ELBO_graph))
-    print('Best ELBO Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        graph = origin_A.data.clone().numpy()
+        graph[np.abs(graph) < 0.1] = 0
+        #print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.1, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    print(best_NLL_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_NLL_graph))
-    print('Best NLL Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        graph[np.abs(graph) < 0.2] = 0
+        #print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.2, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-
-    print (best_MSE_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
-    print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-    graph = origin_A.data.clone().numpy()
-    graph[np.abs(graph) < 0.1] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.1, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-    graph[np.abs(graph) < 0.2] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.2, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-    graph[np.abs(graph) < 0.3] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        graph[np.abs(graph) < 0.3] = 0
+        #print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
 
-except KeyboardInterrupt:
-    # print the best anway
-    print(best_ELBO_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_ELBO_graph))
-    print('Best ELBO Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+    except KeyboardInterrupt:
+        # print the best anway
+        print(best_ELBO_graph)
+        print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_ELBO_graph))
+        print('Best ELBO Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    print(best_NLL_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_NLL_graph))
-    print('Best NLL Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        print(best_NLL_graph)
+        print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_NLL_graph))
+        print('Best NLL Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    print(best_MSE_graph)
-    print(nx.to_numpy_array(ground_truth_G))
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
-    print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        print(best_MSE_graph)
+        print(nx.to_numpy_array(ground_truth_G))
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
+        print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    graph = origin_A.data.clone().numpy()
-    graph[np.abs(graph) < 0.1] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.1, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        graph = origin_A.data.clone().numpy()
+        graph[np.abs(graph) < 0.1] = 0
+        print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.1, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    graph[np.abs(graph) < 0.2] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.2, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
+        graph[np.abs(graph) < 0.2] = 0
+        print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.2, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-    graph[np.abs(graph) < 0.3] = 0
-    print(graph)
-    fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-    print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-
-f = open('trueG', 'w')
-matG = np.matrix(nx.to_numpy_array(ground_truth_G))
-for line in matG:
-    np.savetxt(f, line, fmt='%.5f')
-f.closed
-
-f1 = open('predG', 'w')
-matG1 = np.matrix(origin_A.data.clone().numpy())
-for line in matG1:
-    np.savetxt(f1, line, fmt='%.5f')
-f1.closed
+        graph[np.abs(graph) < 0.3] = 0
+        print(graph)
+        fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+        print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
 
-#if log is not None:
- #   print(save_folder)
- #   log.close()
+    f = open('trueG', 'w')
+    matG = np.matrix(nx.to_numpy_array(ground_truth_G))
+    for line in matG:
+        np.savetxt(f, line, fmt='%.5f')
+    f.closed
+
+    f1 = open('predG', 'w')
+    matG1 = np.matrix(origin_A.data.clone().numpy())
+    for line in matG1:
+        np.savetxt(f1, line, fmt='%.5f')
+    f1.closed
+
+
+    #if log is not None:
+    #   print(save_folder)
+    #   log.close()
+
+
+for i in range(9):
+    
+    print("trial{}".format(i))
+    experiment()

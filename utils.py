@@ -147,27 +147,34 @@ def imputation(G: nx.DiGraph,
         j = ordered_vertices[i]
         if i==0:
             rows = np.where(X[:,j,0]==np.inf)
-            for row in rows[0]:
+            #for row in rows[0]:
               #  if X[row][j][0]==np.inf:
-                if list(G.successors(j)):
-                    child=list(G.successors(j))[0]
-                    X[row][j][0]=X[row][child][0]/W[j][child]+ np.random.normal(scale=noise_scale, size=1)
-                else:
-                    X[row][j][0]=np.random.normal(scale=noise_scale, size=1)
+            if list(G.successors(j)):
+                child=list(G.successors(j))[0]
+                X[rows[0],j,0]=X[rows[0],child,0]/W[j][child]+ np.random.normal(scale=noise_scale, size=len(rows[0]))
+                
+                #X[rows[0]][j][0]=X[rows[0]][child][0]/W[j][child]+ np.random.normal(scale=noise_scale, size=len(rows[0]))
+            else:
+                X[rows[0],j,0]=np.random.normal(scale=noise_scale, size=len(rows[0]))
         else:
             rows = np.where(X[:,j,0]==np.inf)
-            for row in rows[0]:
+            #for row in rows[0]:
                # if X[x][j][0]==np.inf:
-                parents = list(G.predecessors(j))
+            parents = list(G.predecessors(j))
+            if parents:   
                 if linear_type == 'linear':
-                    eta = X[row,parents, 0].dot(W[parents, j])
+                    xxx=X[rows[0],:,:]
+                    eta=xxx[:,parents,0].dot(W[parents, j])
+                    #eta = X[rows[0][:, np.newaxis],parents[:, np.newaxis], 0].dot(W[parents, j])
 
                 if sem_type == 'linear-gauss':
                     if linear_type == 'linear':
                         #X[x,j, 0] = eta 
-                        X[row,j, 0] = eta  + np.random.normal(scale=noise_scale, size=1)
+                        X[rows[0],j, 0] = eta  + np.random.normal(scale=noise_scale, size=len(rows[0]))
                 else:
                     raise ValueError('unknown sem type')
+            else:
+                X[rows[0],j,0]=np.random.normal(scale=noise_scale, size=len(rows[0]))
     return X
 
 
@@ -461,6 +468,7 @@ def load_data(args, batch_size=1000, suffix='', debug = False):
     n, d = args.data_sample_size, args.data_variable_size
     graph_type, degree, sem_type, linear_type = args.graph_type, args.graph_degree, args.graph_sem_type, args.graph_linear_type
     x_dims = args.x_dims
+    perce=args.missing_percentage
 
     if args.data_type == 'synthetic':
         # generate data
@@ -478,12 +486,12 @@ def load_data(args, batch_size=1000, suffix='', debug = False):
             X = all_data['1000']['1']
 
     feature=args.data_variable_size
-    train=X[:int(len(X)*0.8),:,:]
-    test=X[int(len(X)*0.8):,:,:]
+    train=X[:int(len(X)*(1-perce)),:,:]
+    test=X[int(len(X)*(1-perce)):,:,:]
     for f in range(feature):
         test[f::feature,f,0]=np.inf
 
-    feat_train = torch.FloatTensor(X[:int(len(X[0])*0.8),:,:])
+    feat_train = torch.FloatTensor(X[:int(len(X[0])*(1-perce)),:,:])
     
 
     # reconstruct itself
@@ -493,7 +501,7 @@ def load_data(args, batch_size=1000, suffix='', debug = False):
     train_data_loader = DataLoader(train_data, batch_size=batch_size)
 
 
-    return train_data_loader, test, X[:int(len(X)*0.8),:,:], X[int(len(X)*0.8):,:,:], G
+    return train_data_loader, test, X[:int(len(X)*(1-perce)),:,:], X[int(len(X)*(1-perce)):,:,:], G
 
 
 def to_2d_idx(idx, num_cols):
